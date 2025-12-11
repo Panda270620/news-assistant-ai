@@ -8,6 +8,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import plotly.graph_objects as go
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
 
 
 # Configuración de la página
@@ -115,15 +117,46 @@ def extract_keywords(texts, top_n=5):
     return [word for word, count in word_counts.most_common(top_n)]
 
 def analyze_sentiment_simple(texts):
-    """Análisis de sentimiento simple basado en palabras clave"""
+    """Análisis de sentimiento mejorado con más palabras y normalización"""
     positive_words = ['éxito', 'avance', 'mejora', 'innovación', 'crecimiento', 'positivo', 
                       'beneficio', 'progreso', 'logro', 'desarrollo', 'excelente', 'bueno',
-                      'aumenta', 'gana', 'victoria', 'revoluciona', 'mejorando']
+                      'aumenta', 'gana', 'victoria', 'revoluciona', 'mejorando', 'oportunidad',
+                      'solución', 'efectivo', 'eficiente', 'optimiza', 'impulsa', 'fortalece',
+                      'promete', 'facilita', 'potencia', 'prospera', 'ventaja']
     
     negative_words = ['crisis', 'problema', 'falla', 'fracaso', 'declive', 'negativo',
                       'perdida', 'riesgo', 'amenaza', 'crítica', 'deterioro', 'malo',
-                      'disminuye', 'pierde', 'derrota', 'colapso', 'empeorando']
+                      'disminuye', 'pierde', 'derrota', 'colapso', 'empeorando', 'peligro',
+                      'desafío', 'obstáculo', 'limitación', 'error', 'dificulta', 'preocupa',
+                      'vulnera', 'debilita', 'daña', 'conflicto', 'controversia']
     
+    full_text = " ".join(texts).lower()
+    
+    pos_count = sum(full_text.count(word) for word in positive_words)
+    neg_count = sum(full_text.count(word) for word in negative_words)
+    
+    # Si no hay palabras detectadas, retornar neutral
+    if pos_count == 0 and neg_count == 0:
+        return "Neutral", 50
+    
+    total = pos_count + neg_count
+    
+    # Calcular porcentajes
+    if total > 0:
+        pos_percentage = int((pos_count / total) * 100)
+        neg_percentage = int((neg_count / total) * 100)
+    else:
+        return "Neutral", 50
+    
+    # Determinar sentimiento dominante
+    if pos_count > neg_count * 1.3:  # 30% más positivo
+        score = min(70 + (pos_percentage // 3), 100)  # Limitar a 100%
+        return "Positivo", score
+    elif neg_count > pos_count * 1.3:  # 30% más negativo
+        score = max(30 - (neg_percentage // 3), 0)  # Limitar a 0%
+        return "Negativo", abs(score)
+    else:
+        return "Neutral", 50    
     full_text = " ".join(texts).lower()
     
     pos_count = sum(full_text.count(word) for word in positive_words)
@@ -295,7 +328,54 @@ def extract_related_topics(keywords, query):
     # Limitar a 5 sugerencias únicas
     return list(set(related))[:5]
 
+def get_etiquetas():
+    """Obtiene las etiquetas disponibles"""
+    return ["⭐ Favorito", "📚 Leer después", "⚡ Importante", "✅ Leído"]
+
+def inicializar_etiquetas():
+    """Inicializa el sistema de etiquetas en session_state"""
+    if 'etiquetas_noticias' not in st.session_state:
+        st.session_state['etiquetas_noticias'] = {}
+
+def filtrar_por_fecha(noticias, filtro):
+    """Filtra noticias por período de tiempo"""
+    if filtro == "Todas":
+        return noticias
+    
+    from datetime import datetime, timedelta
+    hoy = datetime.now()
+    
+    if filtro == "Últimas 24h":
+        limite = hoy - timedelta(days=1)
+    elif filtro == "Última semana":
+        limite = hoy - timedelta(days=7)
+    elif filtro == "Último mes":
+        limite = hoy - timedelta(days=30)
+    else:
+        return noticias
+    
+    filtradas = []
+    for n in noticias:
+        try:
+            fecha_noticia = datetime.strptime(n['date'], '%Y-%m-%d')
+            if fecha_noticia >= limite:
+                filtradas.append(n)
+        except:
+            filtradas.append(n)
+    
+    return filtradas
+
 # Título y descripción
+
+# Leer query parameter de la URL
+query_params = st.query_params
+if 'search' in query_params:
+    default_query = query_params['search']
+else:
+    default_query = ""
+
+# Inicializar sistema de etiquetas
+inicializar_etiquetas()
 
 # Header mejorado con estilo
 st.markdown("""
@@ -308,11 +388,11 @@ st.markdown("""
 st.markdown("---")
 
 # Sección de búsqueda
-col1, col2, col3 = st.columns([3, 1, 1])
-
+col1, col2, col3, col4 = st.columns([3, 1, 1.2, 0.8])
 with col1:
     query = st.text_input(
         "Ingresa tu tema de interés:",
+        value=default_query,
         placeholder="Ej: inteligencia artificial, biotecnología, cambio climático...",
         key="search_query"
     )
@@ -327,12 +407,27 @@ with col2:
         help="Ingresa cuántas noticias deseas analizar (máximo 100)"
     )
 with col3:
+    filtro_fecha = st.selectbox(
+        "Período:",
+        options=["Todas", "Últimas 24h", "Última semana", "Último mes"],
+        index=0,
+        label_visibility="visible"
+    )
+
+with col4:
     st.markdown("<br>", unsafe_allow_html=True)
     search_button = st.button("🔍 Buscar", type="primary", use_container_width=True)
 
-st.markdown("**Ejemplos:** `inteligencia artificial` · `tecnología cuántica` · `energías renovables` · `neurociencia`")
-
 st.markdown("---")
+
+if 'etiquetas_noticias' in st.session_state and st.session_state['etiquetas_noticias']:
+    filtro_etiqueta = st.multiselect(
+        "🏷️ Filtrar por etiquetas:",
+        options=get_etiquetas(),
+        default=[]
+    )
+else:
+    filtro_etiqueta = []
 
 # Procesar búsqueda
 if search_button and query:
@@ -340,6 +435,8 @@ if search_button and query:
     
     with st.spinner("🔄 Buscando noticias en la web..."):
         noticias = search_news_api(query, num_results=num_to_fetch)
+        # Aplicar filtro de fecha
+        noticias = filtrar_por_fecha(noticias, filtro_fecha)
         
         if noticias:
             texts = [f"{n['title']}. {n['description']}" for n in noticias]
@@ -510,16 +607,60 @@ if 'noticias' in st.session_state:
             st.warning("No se pudo generar el resumen.")
     
     st.markdown("---")
+
+    st.markdown("---")
     
-    # Fuentes
+    # Nube de palabras
+    st.markdown("## ☁️ Nube de Palabras")
+    
+    if st.session_state['noticias']:
+        all_text = " ".join([f"{n['title']} {n['description']}" for n in st.session_state['noticias']])
+        
+        wordcloud = WordCloud(
+            width=800, 
+            height=400, 
+            background_color='#1e1e1e',
+            colormap='viridis',
+            max_words=50,
+            relative_scaling=0.5,
+            stopwords=set(['el', 'la', 'de', 'en', 'y', 'a', 'los', 'las', 'un', 'una', 'por', 'para', 'con'])
+        ).generate(all_text)
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wordcloud, interpolation='bilinear')
+        ax.axis('off')
+        st.pyplot(fig)
+    
+    st.markdown("---")
+    
+ # Fuentes
     st.markdown("## 🔗 Fuentes Consultadas")
     
     if st.session_state['noticias']:
-        fechas = [n.get('date', '') for n in st.session_state['noticias'] if n.get('date')]
-        if fechas:
-            st.caption("📅 Noticias publicadas entre las fechas más recientes disponibles")
+        st.caption("📅 Noticias publicadas entre las fechas más recientes disponibles")
     
-    for i, noticia in enumerate(st.session_state['noticias'], 1):
+    # Aplicar filtro de etiquetas si existe
+    noticias_a_mostrar = st.session_state['noticias']
+    
+    if filtro_etiqueta:
+        noticias_filtradas = []
+        for idx, noticia in enumerate(st.session_state['noticias'], 1):
+            noticia_id = f"{idx}_{noticia['title'][:30]}"
+            etiqueta_noticia = st.session_state['etiquetas_noticias'].get(noticia_id, "Sin etiqueta")
+            
+            if etiqueta_noticia in filtro_etiqueta:
+                noticias_filtradas.append(noticia)
+        
+        noticias_a_mostrar = noticias_filtradas
+        
+        if not noticias_a_mostrar:
+            st.info(f"No hay noticias con las etiquetas seleccionadas: {', '.join(filtro_etiqueta)}")
+    
+    # Mostrar noticias (filtradas o todas)
+    for i, noticia in enumerate(noticias_a_mostrar, 1):
+        noticia_id = f"{i}_{noticia['title'][:30]}"
+        
+        # Calcular antigüedad
         fecha_str = noticia.get('date', 'Fecha no disponible')
         antiguedad = ""
         
@@ -543,7 +684,7 @@ if 'noticias' in st.session_state:
                 antiguedad = " 📅 Reciente"
         else:
             antiguedad = " 📅 Reciente"
-
+            
         # Estilo de tarjeta
         card_style = """
             <style>
@@ -557,6 +698,8 @@ if 'noticias' in st.session_state:
         if i == 1:
             st.markdown(card_style, unsafe_allow_html=True)
         
+        noticia_id = f"{i}_{noticia['title'][:30]}"
+        
         with st.expander(f"📄 {i}. {noticia['title']}{antiguedad}", expanded=(i==1)):
             col1, col2 = st.columns([2, 1])
             
@@ -564,6 +707,22 @@ if 'noticias' in st.session_state:
                 st.markdown(f"**Descripción:** {noticia['description']}")
                 st.markdown(f"📅 **Fecha de publicación:** {noticia['date']}")
                 st.markdown(f"🌐 **Fuente:** {noticia['source']}")
+                
+                # Sistema de etiquetado
+                etiquetas_disponibles = get_etiquetas()
+                etiqueta_actual = st.session_state['etiquetas_noticias'].get(noticia_id, "Sin etiqueta")
+                
+                nueva_etiqueta = st.selectbox(
+                    "🏷️ Etiqueta:",
+                    options=["Sin etiqueta"] + etiquetas_disponibles,
+                    index=0 if etiqueta_actual == "Sin etiqueta" else etiquetas_disponibles.index(etiqueta_actual) + 1,
+                    key=f"etiqueta_{noticia_id}"
+                )
+                
+                if nueva_etiqueta != "Sin etiqueta":
+                    st.session_state['etiquetas_noticias'][noticia_id] = nueva_etiqueta
+                elif noticia_id in st.session_state['etiquetas_noticias']:
+                    del st.session_state['etiquetas_noticias'][noticia_id]
             
             with col2:
                 st.link_button("🔗 Leer artículo completo", noticia['url'], use_container_width=True)
@@ -578,7 +737,7 @@ if 'noticias' in st.session_state:
     
     if len(st.session_state['noticias']) > 1:
         # Obtener recomendaciones basadas en la primera noticia
-        recommendations = get_recommendations(st.session_state['noticias'], 0, top_n=3)
+        recommendations = get_recommendations(st.session_state['noticias'], 0, top_n=5)
         
         if recommendations:
             for i, rec in enumerate(recommendations, 1):
@@ -606,9 +765,18 @@ if 'noticias' in st.session_state:
             cols = st.columns(min(3, len(related_topics)))
             for idx, topic in enumerate(related_topics[:3]):
                 with cols[idx]:
-                    if st.button(f"🔍 {topic}", use_container_width=True):
-                        st.session_state['search_query'] = topic
-                        st.rerun()
+                    # Crear botón HTML funcional
+                    search_url = f"?search={urllib.parse.quote(topic)}"
+                    button_html = f'''
+                        <a href="{search_url}" target="_self" style="text-decoration: none;">
+                            <button style="width:100%; padding:12px; background:#4ECDC4; color:white; 
+                                    border:none; border-radius:8px; cursor:pointer; font-size:14px;
+                                    font-weight:500; transition:0.3s;">
+                                🔍 {topic}
+                            </button>
+                        </a>
+                    '''
+                    st.markdown(button_html, unsafe_allow_html=True)
         else:
             st.info("Explora las palabras clave identificadas para refinar tu búsqueda.")
     else:
